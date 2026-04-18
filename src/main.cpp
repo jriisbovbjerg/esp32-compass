@@ -47,6 +47,7 @@ WebSocketsClient ws;
 bool wsConnected = false;
 unsigned long previousMillis = 0;
 static const unsigned long PUBLISH_INTERVAL = 500;
+uint32_t lastPublishMs = 0;
 
 // ======= HTTP status server =======
 WebServer server(80);
@@ -56,8 +57,9 @@ void handleStatus() {
   doc["hostname"]     = MDNS_HOSTNAME;
   doc["ip"]           = WiFi.localIP().toString();
   doc["uptime_s"]     = millis() / 1000;
-  doc["signalk"]      = wsConnected;
-  doc["calibrated"]   = magCal.calibrated;
+  doc["signalk"]       = wsConnected;
+  doc["publish_age_s"] = lastPublishMs == 0 ? -1 : (int32_t)((millis() - lastPublishMs) / 1000);
+  doc["calibrated"]    = magCal.calibrated;
   doc["heading_deg"]  = lastHeadingRad * 180.0f / PI;
 
   JsonObject gpsObj = doc.createNestedObject("gps");
@@ -147,6 +149,7 @@ void publishAll(float headingRad) {
   String msg;
   serializeJson(doc, msg);
   ws.sendTXT(msg);
+  lastPublishMs = millis();
 }
 
 // ======= Setup helpers =======
@@ -235,19 +238,19 @@ void setup() {
   icm.setGyroRange(ICM20948_GYRO_RANGE_500_DPS);
   icm.setMagDataRate(AK09916_MAG_DATARATE_10_HZ);
 
+  server.on("/status", handleStatus);
+
   connectWiFi();
 
-  if (MDNS.begin(MDNS_HOSTNAME))
-    Serial.printf("mDNS: %s.local\n", MDNS_HOSTNAME);
-
-  setupOTA();
-
-  server.on("/status", handleStatus);
-  server.begin();
-
-  ws.begin(SIGNALK_HOST, SIGNALK_PORT, SIGNALK_PATH);
-  ws.onEvent(onWebSocketEvent);
-  ws.setReconnectInterval(5000);
+  if (WiFi.status() == WL_CONNECTED) {
+    if (MDNS.begin(MDNS_HOSTNAME))
+      Serial.printf("mDNS: %s.local\n", MDNS_HOSTNAME);
+    setupOTA();
+    server.begin();
+    ws.begin(SIGNALK_HOST, SIGNALK_PORT, SIGNALK_PATH);
+    ws.onEvent(onWebSocketEvent);
+    ws.setReconnectInterval(5000);
+  }
 }
 
 // ======= Loop =======
@@ -266,7 +269,23 @@ void loop() {
     return;
   }
 
+  // WiFi watchdog
   if (WiFi.status() != WL_CONNECTED) {
+    static uint32_t lastWiFiRetry = 0;
+    uint32_t now = millis();
+    if (now - lastWiFiRetry > 30000) {
+      Serial.println("WiFi: reconnecting...");
+      connectWiFi();
+      if (WiFi.status() == WL_CONNECTED) {
+        MDNS.begin(MDNS_HOSTNAME);
+        setupOTA();
+        server.begin();
+        ws.begin(SIGNALK_HOST, SIGNALK_PORT, SIGNALK_PATH);
+        ws.onEvent(onWebSocketEvent);
+        ws.setReconnectInterval(5000);
+      }
+      lastWiFiRetry = now;
+    }
     delay(500);
     return;
   }
