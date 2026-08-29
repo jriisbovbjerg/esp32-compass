@@ -16,7 +16,7 @@
 static const char* WIFI_SSID      = "SalkaValka";
 static const char* WIFI_PASSWORD  = "97721314";
 static const char* MDNS_HOSTNAME  = "navigation-input";
-static const char* SIGNALK_HOST   = "192.168.8.115";  // salka-pi — always-on SignalK hub
+static const char* SIGNALK_HOST   = "192.168.8.115";  // salkavpn — always-on SignalK hub
 static const uint16_t SIGNALK_PORT = 3000;
 static const char* SIGNALK_PATH   = "/signalk/v1/stream";
 
