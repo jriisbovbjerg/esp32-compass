@@ -89,6 +89,14 @@ bool wsConnected    = false;
 unsigned long previousMillis = 0;
 uint32_t lastPublishMs = 0;
 
+// Heartbeat: catches a half-open WS session (server restarted, no clean FIN
+// reached this client) at the protocol layer via ping/pong, firing a real
+// WStype_DISCONNECTED that the existing reconnect logic handles. See
+// temperature_monitor's main.cpp for the full writeup.
+static const uint32_t HEARTBEAT_PING_INTERVAL_MS = 15000;
+static const uint32_t HEARTBEAT_PONG_TIMEOUT_MS  = 5000;
+static const uint8_t  HEARTBEAT_MISSED_LIMIT     = 2;
+
 // ======= HTTP status server =======
 WebServer server(80);
 
@@ -271,6 +279,7 @@ void initNetwork() {
   ws.begin(SIGNALK_HOST, SIGNALK_PORT, SIGNALK_PATH);
   ws.onEvent(onWebSocketEvent);
   ws.setReconnectInterval(5000);
+  ws.enableHeartbeat(HEARTBEAT_PING_INTERVAL_MS, HEARTBEAT_PONG_TIMEOUT_MS, HEARTBEAT_MISSED_LIMIT);
 }
 
 // ======= Setup =======
