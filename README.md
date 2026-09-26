@@ -1,106 +1,90 @@
-# ESP32 Compass with ICM-20948
+# navigation_input
 
-A digital compass project using the ESP32-WROOM-32 microcontroller and Adafruit ICM-20948 9-DOF (Degrees of Freedom) sensor breakout board.
+ESP32 sensor node that measures the boat's magnetic heading and GPS data and publishes them to the SignalK hub (salkavpn).
 
-## Hardware Components
+## Hardware
 
-- **Microcontroller**: ESP32-WROOM-32
-- **Sensor**: Adafruit ICM-20948 9-DOF breakout board
-  - 3-axis accelerometer
-  - 3-axis gyroscope
-  - 3-axis magnetometer (AK09916)
-  - Temperature sensor
+| Component | Interface | Purpose |
+|---|---|---|
+| ESP32-WROOM-32 dev board (PlatformIO env `upesy_wroom`) | — | Controller, WiFi |
+| Adafruit ICM-20948 9-DOF breakout | I2C: SDA GPIO21, SCL GPIO22 | Magnetometer gives the magnetic heading. The accelerometer and gyro are read but not used. |
+| u-blox NEO-7M GPS module + external antenna | UART2: ESP32 RX GPIO16, TX GPIO17, 9600 baud | Position, SOG, COG, time, number of satellites |
+| Traco Power TSR 1-2450E DC/DC converter | — | 12V boat supply → 5V for the ESP32 |
 
-## Wiring
+### Power
 
-Connect the ICM-20948 to the ESP32 via I2C:
-
-| ICM-20948 Pin | ESP32 Pin | Description |
-|---------------|-----------|-------------|
-| VIN           | 3.3V      | Power supply (3.3V) |
-| GND           | GND       | Ground |
-| SCL           | GPIO 22   | I2C Clock |
-| SDA           | GPIO 21   | I2C Data |
-
-**Note**: The ICM-20948 operates at 3.3V. Do not connect to 5V.
-
-## Software Dependencies
-
-This project uses PlatformIO for development. Required libraries:
-
-- `Adafruit ICM20X`
-- `Adafruit ICM20948`
-- `Adafruit BusIO`
-- `Adafruit Unified Sensor`
-
-These are automatically installed by PlatformIO when you build the project.
-
-## Building and Uploading
-
-### Prerequisites
-
-1. Install [PlatformIO](https://platformio.org/install)
-2. Install PlatformIO CLI or use PlatformIO IDE (VSCode extension)
-
-### Build the project
-
-```bash
-pio run
+```
+12VDC boat supply ─► TSR 1-2450E ─► 5V ─► ESP32 5V/VIN pin
+                                          ESP32 onboard regulator ─► 3.3V ─► ICM-20948 + NEO-7M
 ```
 
-### Upload to ESP32
+Both sensors run from the ESP32's 3.3V pin. **The ICM-20948 is 3.3V only.** Do not connect it to 5V.
+
+### Wiring
+
+| From | To |
+|---|---|
+| 12VDC supply | TSR 1-2450E input |
+| TSR 1-2450E 5V out / GND | ESP32 5V (VIN) / GND |
+| ICM-20948 VIN / GND | ESP32 3.3V / GND |
+| ICM-20948 SDA | GPIO21 |
+| ICM-20948 SCL | GPIO22 |
+| NEO-7M VCC / GND | ESP32 3.3V / GND |
+| NEO-7M TX | GPIO16 (ESP32 RX) |
+| NEO-7M RX | GPIO17 (ESP32 TX) |
+
+### Prototype (current state)
+
+The unit is still a breadboard prototype mounted on a wooden board.
+
+![Breadboard prototype: ESP32, NEO-7M GPS and ICM-20948](IMG_1627.jpeg)
+The ICM-20948 axis markings show X pointing left and Y pointing up on the board. The heading calculation assumes this orientation, so mount the sensor flat and keep it aligned with the boat's fore-aft axis.
+
+![ICM-20948 close-up with axis orientation](IMG_1628.jpeg)
+
+## What it does
+
+Every 500 ms it publishes a SignalK delta over WebSocket to `ws://192.168.8.115:3000/signalk/v1/stream`:
+
+| SignalK path | Source |
+|---|---|
+| `navigation.headingMagnetic` | ICM-20948 magnetometer (rad) |
+| `navigation.position` | GPS |
+| `navigation.speedOverGround` | GPS (m/s) |
+| `navigation.courseOverGroundTrue` | GPS (rad) |
+| `navigation.datetime` | GPS |
+| `navigation.gnss.satellites` | GPS |
+
+GPS values are only sent once they are valid. Until the magnetometer has been calibrated, the unit sends no heading.
+
+## Magnetometer calibration
+
+Calibration is hard-iron only: the unit records the min/max of each axis and subtracts the centre offsets. The result is stored in NVS, so it survives a reboot.
+
+1. `curl http://navigation-input.local/calibrate/start`
+2. Motor the boat in 2 slow full circles.
+3. `curl http://navigation-input.local/calibrate/stop`
+
+Stop is refused until at least 200 samples have been collected. Calibration stops on its own after 10 minutes. No data is published while it runs.
+
+## Network
+
+- WiFi `SalkaValka`, mDNS hostname `navigation-input.local`
+- `GET /status` returns a JSON status page (see the ESP32 node conventions in the top-level `CLAUDE.md`)
+- OTA updates via ArduinoOTA
+- WebSocket heartbeat (ping every 15 s; the connection is dropped after 2 missed pongs) with automatic reconnect
+
+## Build and flash
 
 ```bash
-pio run --target upload
+pio run -t upload                                        # first flash (USB)
+pio run -t upload --upload-port navigation-input.local   # OTA, on the boat network
+../ota_upload.sh navigation_input                        # OTA from home, via salkavpn
+pio device monitor                                       # serial console, 115200 baud
 ```
 
-### Monitor serial output
+## Limitations / TODO
 
-```bash
-pio device monitor
-```
-
-Or combine upload and monitor:
-
-```bash
-pio run --target upload && pio device monitor
-```
-
-## Features
-
-The compass application provides:
-
-- **Heading calculation**: Displays the compass heading in degrees (0-360°)
-- **Magnetometer readings**: Raw X, Y, Z magnetic field data in microteslas (µT)
-- **Accelerometer data**: X, Y, Z acceleration in m/s²
-- **Gyroscope data**: X, Y, Z angular velocity in rad/s
-- **Temperature**: Sensor temperature in °C
-
-Data is output to the serial monitor at 115200 baud, updating every 500ms.
-
-## Usage
-
-1. Power on the ESP32
-2. Open serial monitor at 115200 baud
-3. The device will initialize and begin displaying sensor data
-4. Hold the sensor flat and rotate to see heading changes
-5. Move the sensor away from magnetic interference for accurate readings
-
-## Calibration Notes
-
-For accurate compass readings, you may need to calibrate the magnetometer to account for:
-
-- **Hard iron effects**: Permanent magnetic fields from the device itself
-- **Soft iron effects**: Magnetic materials that distort the Earth's magnetic field
-
-Calibration typically involves rotating the sensor in a figure-8 pattern and recording min/max values for each axis.
-
-## Troubleshooting
-
-- **"Failed to find ICM20948 chip"**: Check wiring connections and ensure proper power supply
-- **Erratic readings**: Move away from electromagnetic interference (motors, speakers, metal objects)
-- **No serial output**: Verify serial monitor baud rate is set to 115200
-
-## License
-
-MIT License - Feel free to modify and use for your projects.
+- **No tilt compensation.** Heading uses only the magnetometer's X/Y axes, so it will drift when the boat heels or pitches.
+- **No magnetic declination correction.** Only a magnetic heading is published, not a true one.
+- Prototype on a breadboard; needs a permanent build and enclosure.
